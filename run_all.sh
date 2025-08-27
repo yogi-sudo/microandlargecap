@@ -58,8 +58,6 @@ fi
 log "Universe size: $(tail -n +2 data/nextday_universe_valid.csv | wc -l | tr -d ' ')"
 
 # ---- (Optional) News step (placeholder) -------------------------------------
-# If you have fetchers/news_fetcher_*.py, you could call them here.
-# For now ensure an events file exists so downstream doesn’t choke.
 if [[ ! -f data/events.csv ]]; then
   log "Creating empty events.csv"
   echo "ticker,headline,source,ts" > data/events.csv
@@ -69,7 +67,6 @@ fi
 if [[ -f main.py ]]; then
   log "Running ML swing model (main.py)"
   python main.py || true
-  # pick latest trade_plan*.csv
   LAST_PLAN="$(ls -1 out/trade_plan*.csv 2>/dev/null | sort | tail -n1 || true)"
   if [[ -n "${LAST_PLAN}" && -f "${LAST_PLAN}" ]]; then
     log "Converting ${LAST_PLAN} -> artifacts/nextday_report.csv"
@@ -84,7 +81,6 @@ if not files:
 else:
     p=files[-1]
     df=pd.read_csv(p)
-    # normalize -> report schema
     out=pd.DataFrame({
         "ticker": df.get("Ticker", df.get("ticker","")),
         "label": "bullish",
@@ -156,7 +152,6 @@ if os.path.exists(s):
     a=pd.read_csv(s); a.insert(0,"group","Daily Swing (Large/Mid)"); dfs.append(a)
 if os.path.exists(m):
     b=pd.read_csv(m); 
-    # map to unified schema
     if not b.empty:
         keep=["ticker","entry","tp","sl"]
         for c in keep:
@@ -210,12 +205,10 @@ df["ticker"]=norm(df["ticker"])
 if os.path.exists("data/universe_caps.csv"):
     caps=pd.read_csv("data/universe_caps.csv")
     if "ticker" not in caps.columns:
-        # try to find a ticker-like column
         for c in ["Ticker","symbol","Symbol","code","Code"]:
             if c in caps.columns:
                 caps["ticker"]=caps[c]; break
     caps["ticker"]=norm(caps["ticker"])
-    # find market cap-like column, coerce to millions
     cap_col=None
     for c in ["market_cap_m","market_cap","marketCap","MarketCap","mktcap","cap_m",
               "market_capitalization","market_capitalisation","MarketCapitalisation"]:
@@ -227,7 +220,6 @@ if os.path.exists("data/universe_caps.csv"):
         caps["market_cap_m"]=v
     else:
         caps["market_cap_m"]=pd.NA
-    # optional sector
     sec=None
     for c in ["sector","Sector","industry","Industry","GICS_Sector","GICS Sector"]:
         if c in caps.columns: sec=c; break
