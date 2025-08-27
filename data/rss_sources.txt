@@ -1,0 +1,5 @@
+https://www.marketindex.com.au/news/rss.xml
+https://au.finance.yahoo.com/rss/
+https://www.afr.com/rss
+https://www.theaustralian.com.au/business/rss
+https://www.livewiremarkets.com/feeds/rss
