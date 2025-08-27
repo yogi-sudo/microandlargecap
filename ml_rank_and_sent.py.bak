@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+import os, sys, glob, json, math, time, datetime as dt
+import pandas as pd
+import numpy as np
+import requests
+from tqdm import tqdm
+
+# ---------- Config ----------
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+TOP_PER_BUCKET = int(os.getenv("TOP_PER_BUCKET", "4"))   # how many to print per size bucket
+TOP_OVERALL = int(os.getenv("TOP_OVERALL", "10"))        # how many overall to print/save
+NEWS_LOOKBACK_DAYS = int(os.getenv("NEWS_LOOKBACK_DAYS", "3"))
+NEWS_MAX_ARTICLES = int(os.getenv("NEWS_MAX_ARTICLES", "6"))
+SENT_WITH_OPENAI = os.getenv("SENT_WITH_OPENAI", "1") == "1"  # set 0 to skip OpenAI
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OUT_DIR = "out"
+
+# ---------- IO helpers ----------
+def newest_tier_csv():
+    files = sorted(glob.glob(os.path.join(OUT_DIR, "tier_combined*.csv")))
+    if not files:
+        raise FileNotFoundError("No out/tier_combined*.csv found. Run your tiered scan first.")
+    return files[-1]
+
+def coerce_num(s):
+    if pd.isna(s):
+        return np.nan
+    if isinstance(s, (int, float, np.integer, np.floating)):
+        return float(s)
+    s = str(s).strip()
+    s = s.replace(",", "")
+    if s.endswith("%"):
+        s = s[:-1]
+    try:
+        return float(s)
+    except:
+        return np.nan
+
+def ensure_numeric(df, cols):
+    for c in cols:
+        if c in df.columns:
+            df[c] = df[c].apply(coerce_num)
+
+# ---------- Sentiment ----------
+def newsapi_search(query, from_date):
+    if not NEWSAPI_KEY:
+        return []
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": query,
+        "from": from_date,
+        "sortBy": "publishedAt",
+        "language": "en",
+        "pageSize": NEWS_MAX_ARTICLES,
+        "apiKey": NEWSAPI_KEY
+    }
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("articles", []) or []
+    except Exception:
+        return []
+
+def openai_sentiment(text):
+    if not SENT_WITH_OPENAI or not OPENAI_API_KEY:
+        return 50.0, "neutral", "no OpenAI key or disabled"
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        prompt = (
+            "Score the following finance news text from 0 (very bearish) to 100 (very bullish). "
+            "Return ONLY the number.\n\n" + text[:6000]
+        )
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.2
+        )
+        s = (resp.choices[0].message.content or "").strip()
+        # extract a number
+        num = "".join(ch for ch in s if ch.isdigit() or ch==".")
+        v = float(num) if num else 50.0
+        v = max(0.0, min(100.0, v))
+        label = "bullish" if v>=60 else ("bearish" if v<=40 else "neutral")
+        return v, label, "openai"
+    except Exception as e:
+        return 50.0, "neutral", f"openai_fail:{type(e).__name__}"
+
+def sentiment_for_ticker(ticker):
+    # Search by company code (strip .AX)
+    base = ticker.replace(".AX", "")
+    since = (dt.date.today() - dt.timedelta(days=NEWS_LOOKBACK_DAYS)).isoformat()
+    arts = newsapi_search(base, since)
+    if not arts:
+        return 50.0, "neutral", "no recent news"
+
+    # Simple text bundle from NewsAPI
+    titles = []
+    seen = set()
+    for a in arts:
+        t = (a.get("title") or "").strip()
+        if t and t.lower() not in seen:
+            titles.append(t)
+            seen.add(t.lower())
+    text = "\n".join(titles) if titles else "No usable titles."
+
+    # Run OpenAI if available; otherwise heuristic neutral
+    score, label, reason = openai_sentiment(text)
+    return score, label, reason if reason else "ok"
+
+# ---------- Size buckets ----------
+def bucket_by_mcap(mcap):
+    if pd.isna(mcap):
+        return "unknown"
+    # values are assumed in absolute dollars (e.g., 26.3e9)
+    if mcap >= 10e9:
+        return "large"
+    if mcap >= 2e9:
+        return "mid"
+    return "micro"
+
+# ---------- Main ----------
+def main():
+    os.makedirs(OUT_DIR, exist_ok=True)
+    csv_path = newest_tier_csv()
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        print("tier_combined CSV is empty.")
+        sys.exit(0)
+
+    # Standardize expected columns
+    # Expect at least: Tier, Ticker, Date, Close, Score, VRatio, Ret5, DistToHH, TrendUp, AvgVol20
+    # Some may be missing (e.g., MarketCap). We'll be defensive.
+    required = ["Ticker", "Close", "Score", "VRatio", "Ret5"]
+    for c in required:
+        if c not in df.columns:
+            raise ValueError(f"Missing required column '{c}' in {csv_path}")
+
+    # Clean numerics
+    ensure_numeric(df, ["Close","Score","VRatio","Ret5","DistToHH","AvgVol20","MarketCap"])
+    # If Ret5 was a % string originally, ensure it's numeric like 5.0 not "5%"
+    # coerce_num above already strips '%'
+    df["Ret5"] = df["Ret5"].astype(float)
+
+    # Date
+    if "Date" in df.columns:
+        # normalize to date string
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
+    asof_date = df["Date"].max() if "Date" in df.columns else dt.date.today()
+
+    # If MarketCap missing, create a proxy (Close * AvgVol20 * 60) just for sorting/bucketing stability
+    if "MarketCap" not in df.columns or df["MarketCap"].isna().all():
+        proxy = df["Close"].fillna(0.0) * df.get("AvgVol20", pd.Series([0]*len(df))).fillna(0.0) * 60.0
+        df["MarketCap"] = proxy
+
+    # Make buckets: prefer real Tier if it exists, else bucket by market cap
+    if "Tier" not in df.columns:
+        df["Tier"] = df["MarketCap"].apply(bucket_by_mcap)
+
+    # Rank score (tech composite): Score + VRatio + (Ret5/5) - small penalty for far from high + trend bonus
+    dist = df.get("DistToHH", pd.Series([0]*len(df))).fillna(0.0)
+    trend = df.get("TrendUp", pd.Series([0]*len(df))).fillna(0.0)
+    df["rank_score"] = df["Score"].fillna(0.0) + df["VRatio"].fillna(0.0) + (df["Ret5"].fillna(0.0)/5.0) - (dist/10.0) + (0.2*trend)
+
+    # Normalize rank_score to 0..1
+    mn, mx = df["rank_score"].min(), df["rank_score"].max()
+    if math.isclose(mx, mn):
+        df["rank_norm"] = 0.5
+    else:
+        df["rank_norm"] = (df["rank_score"] - mn) / (mx - mn)
+
+    # Pull sentiment per unique ticker
+    uniq = df["Ticker"].dropna().unique().tolist()
+    sent_rows = []
+    print(f"Universe: {len(uniq)} tickers | Date: {asof_date}")
+    for t in tqdm(uniq, desc="News Sentiment"):
+        scr, lab, why = sentiment_for_ticker(t)
+        sent_rows.append({"Ticker":t, "Sentiment":scr, "SentimentLabel":lab, "SentimentReason":why})
+    sent = pd.DataFrame(sent_rows)
+
+    # Merge
+    out = df.merge(sent, on="Ticker", how="left")
+    out["Sentiment"] = out["Sentiment"].fillna(50.0)
+    # Blended: 60% technical rank + 40% sentiment (0..1)
+    out["Blended"] = 100.0*(0.6*out["rank_norm"] + 0.4*(out["Sentiment"]/100.0))
+
+    # Sort keys
+    out = out.sort_values(["Blended","rank_score","Sentiment"], ascending=False)
+
+    # Pretty formats for printing
+    def fmt_money(x):
+        try:
+            v = float(x)
+        except:
+            return "-"
+        if v >= 1e9: return f"{v/1e9:.1f}B"
+        if v >= 1e6: return f"{v/1e6:.1f}M"
+        return f"{v:.0f}"
+
+    # Print buckets if we can
+    def print_bucket(name, dfb):
+        if dfb.empty:
+            print(f"(No {name} found)")
+            return
+        sub = dfb.head(TOP_PER_BUCKET).copy()
+        cols = ["Ticker","Close","Blended","Sentiment"]
+        if "MarketCap" in sub.columns:
+            cols.append("MarketCap")
+        print(f"\n=== {name.title()} Caps Top {min(TOP_PER_BUCKET, len(sub))} ===")
+        print(sub[cols].to_string(
+            index=False,
+            formatters={
+                "Close":lambda x:f"{x:.2f}",
+                "Blended":lambda x:f"{x:.1f}",
+                "Sentiment":lambda x:f"{x:.1f}",
+                "MarketCap":fmt_money
+            }
+        ))
+
+    for bucket in ["large","mid","micro"]:
+        print_bucket(bucket, out[out["Tier"].str.lower()==bucket])
+
+    # Overall top
+    print(f"\n=== Overall Top {min(TOP_OVERALL, len(out))} ===")
+    cols = ["Tier","Ticker","Close","Blended","Sentiment"]
+    if "MarketCap" in out.columns:
+        cols.append("MarketCap")
+    print(out.head(TOP_OVERALL)[cols].to_string(
+        index=False,
+        formatters={
+            "Close":lambda x:f"{x:.2f}",
+            "Blended":lambda x:f"{x:.1f}",
+            "Sentiment":lambda x:f"{x:.1f}",
+            "MarketCap":fmt_money
+        }
+    ))
+
+    # Save CSV
+    save_cols = ["Tier","Ticker","Date","Close","Score","VRatio","Ret5","DistToHH","TrendUp",
+                 "AvgVol20","MarketCap","rank_score","rank_norm","Sentiment","SentimentLabel",
+                 "SentimentReason","Blended"]
+    save_cols = [c for c in save_cols if c in out.columns]
+    out_csv = os.path.join(OUT_DIR, f"ml_ranked_sent_{asof_date}.csv")
+    out[save_cols].to_csv(out_csv, index=False)
+    print(f"\nSaved: {out_csv}")
+
+if __name__ == "__main__":
+    main()

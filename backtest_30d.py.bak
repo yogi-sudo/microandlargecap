@@ -1,0 +1,82 @@
+import os, pandas as pd, numpy as np, datetime as dt
+from tqdm import tqdm
+from pathlib import Path
+import yfinance as yf
+
+BASE_CAPITAL = 3000
+LOOKBACK_DAYS = 30
+PICK_FILE_TEMPLATE = "out/trade_plan_{date}.csv"
+
+def get_last_n_trading_days(n=30):
+    today = dt.date.today()
+    days = []
+    while len(days) < n+1:
+        today -= dt.timedelta(days=1)
+        if today.weekday() < 5:
+            days.append(today)
+    return list(reversed(days))
+
+def load_picks_for_day(date_str):
+    fn = PICK_FILE_TEMPLATE.format(date=date_str)
+    if os.path.exists(fn):
+        return pd.read_csv(fn)
+    return None
+
+def fetch_close_price(ticker, date):
+    try:
+        df = yf.download(ticker, start=date.isoformat(), end=(date+dt.timedelta(days=1)).isoformat(), progress=False)
+        return float(df["Close"].iloc[-1]) if not df.empty else np.nan
+    except:
+        return np.nan
+
+def calc_pnl_for_day(date, picks):
+    """picks: DataFrame from previous day"""
+    results = []
+    for _, row in picks.iterrows():
+        close_today = fetch_close_price(row["Ticker"], date)
+        if np.isnan(close_today): continue
+        pnl_per_share = close_today - row["BuyPrice"]
+        pnl_total = pnl_per_share * row["Qty"]
+        pnl_pct = (pnl_total / BASE_CAPITAL) * 100
+        results.append((row["Ticker"], row["BuyPrice"], close_today, pnl_total, pnl_pct))
+    return results
+
+def main():
+    days = get_last_n_trading_days(LOOKBACK_DAYS)
+    records = []
+    capital = BASE_CAPITAL
+
+    for i in tqdm(range(len(days)-1), desc="Backtesting"):
+        pick_day = days[i]
+        trade_day = days[i+1]
+        pick_file_date = pick_day.isoformat()
+
+        picks = load_picks_for_day(pick_file_date)
+        if picks is None: continue
+
+        day_pnl = calc_pnl_for_day(trade_day, picks)
+        total_pnl = sum(p[3] for p in day_pnl)
+        capital += total_pnl
+
+        records.append({
+            "PickDate": pick_day,
+            "TradeDate": trade_day,
+            "DailyPnL": total_pnl,
+            "DailyPnL%": (total_pnl/BASE_CAPITAL)*100,
+            "Capital": capital
+        })
+
+    df = pd.DataFrame(records)
+    Path("out").mkdir(exist_ok=True)
+    out_file = "out/backtest_30d_pnl.csv"
+    df.to_csv(out_file, index=False)
+    print(f"\nSaved backtest results to {out_file}")
+    if not df.empty:
+        print(df.tail(10))
+        print(f"\nWin rate: {(df['DailyPnL']>0).mean()*100:.2f}%")
+        print(f"Cumulative return over {LOOKBACK_DAYS} days: {((capital-BASE_CAPITAL)/BASE_CAPITAL)*100:.2f}%")
+    else:
+        print("No valid pick files found in last 30 days.")
+
+if __name__ == "__main__":
+    main()

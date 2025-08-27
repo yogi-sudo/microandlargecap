@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+import os, sys, json, datetime as dt, requests, warnings
+import pandas as pd, numpy as np
+from tqdm import tqdm
+import yfinance as yf
+from dotenv import load_dotenv
+
+warnings.filterwarnings("ignore")
+TODAY = dt.date.today()
+OUT_DIR, CACHE_DIR = "out", "cache"
+os.makedirs(OUT_DIR, exist_ok=True); os.makedirs(CACHE_DIR, exist_ok=True)
+load_dotenv()
+EODHD_KEY = os.getenv("EODHD_API_KEY")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
+
+UNIVERSE_FILE = "universe_caps.csv"
+RISK_PER_TRADE = 0.01
+EQUITY = 100000
+ATR_MULT_SL = 2.0
+ATR_MULT_TP = 3.0
+
+def get_model():
+    try:
+        import xgboost as xgb
+        return ("xgb", xgb.XGBClassifier(
+            n_estimators=300, max_depth=5, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8, tree_method="hist",
+            eval_metric="auc", n_jobs=-1
+        ))
+    except Exception:
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        return ("hgb", HistGradientBoostingClassifier(
+            max_depth=6, learning_rate=0.06, max_iter=400,
+            validation_fraction=None
+        ))
+
+def load_universe():
+    df = pd.read_csv(UNIVERSE_FILE)
+    df = df.dropna(subset=["Ticker","Approx. Market Cap ($B)"])
+    df["Approx. Market Cap ($B)"] = df["Approx. Market Cap ($B)"].astype(float)
+    df = df.sort_values("Approx. Market Cap ($B)", ascending=False)
+    return df
+
+def fetch_ohlcv(ticker, years=3):
+    start = (TODAY - dt.timedelta(days=365*years)).isoformat()
+    cache_file = f"{CACHE_DIR}/{ticker}_ohlc.csv"
+    if os.path.exists(cache_file):
+        try:
+            d = pd.read_csv(cache_file, parse_dates=["date"])
+            need_cols = {"date","open","high","low","close","volume"}
+            if not d.empty and need_cols.issubset(d.columns):
+                return d
+        except Exception:
+            pass
+    if EODHD_KEY:
+        try:
+            url = f"https://eodhd.com/api/eod/{ticker}.AU"
+            params = {"api_token": EODHD_KEY, "fmt":"json","period":"d","from":start}
+            r = requests.get(url, params=params, timeout=30)
+            if r.status_code == 200:
+                d = pd.DataFrame(r.json())
+                if not d.empty:
+                    d.rename(columns={"date":"date"}, inplace=True)
+                    d["date"] = pd.to_datetime(d["date"])
+                    d = d[["date","open","high","low","close","volume"]]
+                    d.to_csv(cache_file, index=False)
+                    return d
+        except Exception:
+            pass
+    try:
+        d = yf.download(f"{ticker}.AX", start=start, end=(TODAY+dt.timedelta(days=1)).isoformat(), progress=False)
+        if not d.empty:
+            d = d.reset_index()[["Date","Open","High","Low","Close","Volume"]]
+            d.columns = ["date","open","high","low","close","volume"]
+            d.to_csv(cache_file, index=False)
+            return d
+    except Exception:
+        pass
+    return None
+
+def atr(df, n=14):
+    high, low, close = df["high"], df["low"], df["close"]
+    tr = pd.concat([
+        (high - low),
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    return tr.rolling(n).mean()
+
+def news_sentiment(ticker):
+    try:
+        if not NEWSAPI_KEY:
+            return 0.5
+        url = "https://newsapi.org/v2/everything"
+        params = {"q":ticker,"apiKey":NEWSAPI_KEY,"pageSize":5,"sortBy":"publishedAt","language":"en"}
+        r = requests.get(url, params=params, timeout=20)
+        arts = r.json().get("articles",[])
+        if not arts: return 0.5
+        text = " ".join([a.get("title","")+" "+a.get("description","") for a in arts])
+        pos_words = sum(w in text.lower() for w in ["up","beat","growth","profit","upgrade","surge","record","strong","wins"])
+        neg_words = sum(w in text.lower() for w in ["down","miss","loss","cut","downgrade","weak","fraud","delay","probe"])
+        score = (pos_words - neg_words) / max(1, (pos_words + neg_words))
+        return float(np.clip(0.5 + 0.5*score, 0.0, 1.0))
+    except Exception:
+        return 0.5
+
+def compute_features(df):
+    df = df.copy()
+    if isinstance(df["close"], pd.DataFrame):
+        df["close"] = df["close"].iloc[:,0]
+    df["ret1"] = df["close"].pct_change()
+    df["ret5"] = df["close"].pct_change(5)
+    df["ma20"] = df["close"].rolling(20).mean()
+    df["vol20"] = df["close"].pct_change().rolling(20).std()
+    df["atr14"] = atr(df,14)
+    df.dropna(inplace=True)
+    return df
+
+def main():
+    uni = load_universe()
+    print(f"Universe loaded: {len(uni)} stocks")
+
+    dfs=[]
+    for t in tqdm(uni["Ticker"], desc="OHLCV"):
+        d = fetch_ohlcv(t, years=3)
+        if d is not None and len(d) > 120:
+            f = compute_features(d)
+            if not f.empty:
+                f["ticker"] = t
+                dfs.append(f)
+    if not dfs:
+        sys.exit("No price data available.")
+
+    data = pd.concat(dfs).sort_values(["ticker","date"])
+    data["target"] = (data.groupby("ticker")["close"].shift(-1) > data["close"]).astype(int)
+    feat_cols = ["close","ret1","ret5","ma20","vol20","atr14"]
+
+    cutoff = data["date"].max() - dt.timedelta(days=60)
+    train = data[data["date"]<=cutoff]
+    test  = data[data["date"]> cutoff]
+
+    if train.empty or test.empty:
+        sys.exit("Not enough data to train/test. Pull more history.")
+
+    model_name, model = get_model()
+    Xtr, ytr = train[feat_cols], train["target"]
+    Xte, yte = test[feat_cols], test["target"]
+    model.fit(Xtr, ytr)
+    try:
+        from sklearn.metrics import roc_auc_score
+        auc = roc_auc_score(yte, getattr(model, "predict_proba", lambda x: np.c_[(1-model.predict(x)), model.predict(x)])(Xte)[:,1])
+    except Exception:
+        auc = float("nan")
+    print(f"Model={model_name} | Holdout AUC={auc:.3f}" if not np.isnan(auc) else f"Model={model_name} | Holdout AUC=NA")
+
+    latest = data.groupby("ticker").tail(1).copy()
+    if hasattr(model, "predict_proba"):
+        latest["ml_prob"] = model.predict_proba(latest[feat_cols])[:,1]
+    else:
+        # HistGradientBoosting has decision_function; map to 0..1 via logistic
+        from scipy.special import expit
+        latest["ml_prob"] = expit(model.decision_function(latest[feat_cols]))
+
+    latest["sentiment"] = latest["ticker"].apply(news_sentiment)
+    latest["blended"] = latest["ml_prob"]*0.7 + latest["sentiment"]*0.3
+
+    out=[]
+    for _,r in latest.iterrows():
+        atr14 = float(r["atr14"])
+        sl = max(0.01, r["close"] - ATR_MULT_SL*atr14)
+        tp = r["close"] + ATR_MULT_TP*atr14
+        risk_per_share = max(0.01, r["close"] - sl)
+        size = int((EQUITY*RISK_PER_TRADE)/risk_per_share)
+        out.append({
+            "Ticker":r["ticker"],"Date":r["date"].date(),"Close":round(float(r["close"]),2),
+            "ML_Prob":round(float(r["ml_prob"]),3),"Sentiment":round(float(r["sentiment"]),2),
+            "Blended":round(float(r["blended"]),3),
+            "StopLoss":round(float(sl),2),"TakeProfit":round(float(tp),2),"Size":size
+        })
+    df_out = pd.DataFrame(out).sort_values(["Blended","ML_Prob"], ascending=False)
+    fname = f"{OUT_DIR}/trade_plan_{TODAY.isoformat()}.csv"
+    df_out.to_csv(fname, index=False)
+    print(f"\nSaved trade plan: {fname}")
+    print(df_out.head(15).to_string(index=False))
+
+if __name__=="__main__":
+    main()

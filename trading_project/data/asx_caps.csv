@@ -1,0 +1,150 @@
+Ticker,Company,Price,MarketCapB
+CBA,Commonwealth Bank of Australia,169.08,282.95
+BHP,BHP Group Ltd,42.65,216.62
+WBC,Westpac Banking Corporation,38.30,131
+NAB,National Australia Bank Ltd,41.86,128.22
+CSL,CSL Ltd,215.16,104.18
+WES,Wesfarmers Ltd,91.39,103.66
+ANZ,ANZ Group Holdings Ltd,33.15,98.9
+MQG,Macquarie Group Ltd,224.60,85.6
+GMG,Goodman Group,34.05,69.16
+FMG,Fortescue Ltd,19.22,59.18
+TLS,Telstra Group Ltd,4.98,56.7
+WDS,Woodside Energy Group Ltd,27.03,51.32
+TCL,Transurban Group,14.69,45.74
+ALL,Aristocrat Leisure Ltd,71.86,44.62
+RIO,RIO Tinto Ltd,115.42,42.85
+WOW,Woolworths Group Ltd,33.42,40.83
+WTC,Wisetech Global Ltd,115.75,38.73
+BXB,Brambles Ltd,26.13,35.72
+REA,REA Group Ltd,257.91,34.07
+SIG,Sigma Healthcare Ltd,2.82,32.55
+QBE,QBE Insurance Group Ltd,21.16,31.95
+PME,Pro Medicus Ltd,302.38,31.6
+COL,Coles Group Ltd,22.50,30.18
+XRO,Xero Ltd,164.05,27.13
+NST,Northern Star Resources Ltd,18.60,26.6
+STO,Santos Ltd,7.97,25.88
+RMD,Resmed Inc,44.05,25.7
+SUN,Suncorp Group Ltd,21.15,22.9
+ORG,Origin Energy Ltd,12.91,22.24
+CPU,Computershare Ltd,38.09,22.03
+SCG,Scentre Group,4.06,21.15
+SGH,SGH Ltd,49.44,20.12
+IAG,Insurance Australia Group Ltd,8.47,20.03
+COH,Cochlear Ltd,301.01,19.69
+FPH,Fisher & Paykel Healthcare Corporation Ltd,33.55,19.67
+QAN,Qantas Airways Ltd,11.11,16.81
+EVN,Evolution Mining Ltd,8.34,16.79
+PMGOLD,Gold Corporation,51.83,16.66
+SOL,Washington H Soul Pattinson & Company Ltd,42.14,15.5
+SGP,Stockland,6.32,15.17
+CAR,CAR Group Ltd,40.09,15.16
+MPL,Medibank Private Ltd,5.10,14.05
+LYC,Lynas Rare Earths Ltd,14.71,13.76
+TNE,Technology One Ltd,40.43,13.24
+JHX,James Hardie Industries Plc,30.55,13.13
+S32,SOUTH32 Ltd,2.90,13.06
+TLC,The Lottery Corporation Ltd,5.84,13
+JBH,JB Hi-Fi Ltd,115.04,12.58
+ASX,ASX Ltd,61.71,11.99
+VCX,Vicinity Centres,2.60,11.86
+SHL,Sonic Healthcare Ltd,23.84,11.78
+AIA,Auckland International Airport Ltd,6.84,11.55
+NEM,Newmont Corporation,109.03,11.44
+APA,APA Group,8.71,11.36
+CHC,Charter Hall Group,23.85,11.28
+GPT,GPT Group,5.60,10.73
+ORI,Orica Ltd,21.93,10.45
+SEK,Seek Ltd,27.98,10
+BSL,Bluescope Steel Ltd,22.68,9.95
+TPG,TPG Telecom Ltd,5.27,9.8
+MGR,Mirvac Group,2.39,9.43
+ALQ,ALS Ltd,18.48,9.37
+AFI,Australian Foundation Investment Company Ltd,7.38,9.25
+AMC,Amcor Plc,13.04,8.98
+NXT,NEXTDC Ltd,13.99,8.96
+RHC,Ramsay Health Care Ltd,38.20,8.82
+HUB,HUB24 Ltd,106.24,8.62
+NWL,Netwealth Group Ltd,35.16,8.62
+MCY,Mercury NZ Ltd,5.77,8.12
+DXS,Dexus,7.54,8.11
+360,LIFE360 Inc,46.32,7.93
+ALX,Atlas Arteria,5.39,7.82
+HVN,Harvey Norman Holdings Ltd,6.17,7.69
+BEN,Bendigo and Adelaide Bank Ltd,13.47,7.65
+QUB,QUBE Holdings Ltd,4.21,7.45
+YAL,Yancoal Australia Ltd,5.47,7.22
+EDV,Endeavour Group Ltd,4.03,7.22
+EBO,Ebos Group Ltd,35.39,7.19
+ARG,Argo Investments Ltd,9.37,7.13
+MGOC,Magellan Global Fund - Open Class Units - Active ETF,3.10,7.06
+ALD,Ampol Ltd,29.53,7.04
+REH,Reece Ltd,10.89,7.03
+PLS,Pilbara Minerals Ltd,2.15,6.92
+MIN,Mineral Resources Ltd,35.08,6.89
+A2M,The a2 Milk Company Ltd,9.17,6.64
+WOR,Worley Ltd,12.61,6.51
+TLX,TELIX Pharmaceuticals Ltd,18.93,6.41
+TWE,Treasury Wine Estates Ltd,7.86,6.38
+MEZ,Meridian Energy Ltd,4.91,6.26
+CWY,Cleanaway Waste Management Ltd,2.72,6.07
+SFR,Sandfire Resources Ltd,12.60,5.78
+RMS,Ramelius Resources Ltd,3.01,5.76
+CGF,Challenger Ltd,8.31,5.75
+APE,Eagers Automotive Ltd,22.01,5.68
+AZJ,Aurizon Holdings Ltd,3.23,5.65
+WHC,Whitehaven Coal Ltd,6.75,5.62
+DNL,Dyno Nobel Ltd,3.06,5.58
+CDA,Codan Ltd,30.60,5.56
+AGL,AGL Energy Ltd,8.12,5.46
+ZIP,ZIP Co Ltd,4.12,5.32
+GQG,GQG Partners Inc,1.785,5.28
+BKW,Brickworks Ltd,34.31,5.25
+GOLD,Global X Physical Gold Structured,47.81,5.22
+XYZ,"Block, Inc",121.23,5.21
+BOQ,Bank of Queensland Ltd,7.87,5.21
+ANN,Ansell Ltd,34.59,5.05
+DOW,Downer Edi Ltd,7.29,4.9
+BRG,Breville Group Ltd,33.74,4.86
+GMD,Genesis Minerals Ltd,4.29,4.85
+PNI,Pinnacle Investment Management Group Ltd,21.25,4.82
+DGCE,Dimensional Global Core Equity Trust Unhedged - Active ETF,29.35,4.77
+VNT,Ventia Services Group Ltd,5.55,4.64
+MTS,Metcash Ltd,4.18,4.59
+LNW,Light & Wonder Inc,147.00,4.52
+CMM,Capricorn Metals Ltd,10.18,4.39
+AMP,AMP Ltd,1.72,4.35
+SPK,Spark New Zealand Ltd,2.26,4.27
+SUL,Super Retail Group Ltd,18.58,4.2
+AAA,Betashares Australian High Interest Cash ETF,50.22,4.18
+TUA,Tuas Ltd,7.72,4.15
+BFL,BSP Financial Group Ltd,8.80,4.11
+LOV,Lovisa Holdings Ltd,36.41,4.03
+AUB,AUB Group Ltd,33.48,3.9
+IGO,IGO Ltd,5.15,3.9
+CNU,Chorus Ltd,8.77,3.81
+LLC,Lendlease Group,5.44,3.75
+CEN,Contact Energy Ltd,8.225,3.72
+NHC,New Hope Corporation Ltd,4.41,3.72
+GGP,Greatland Resources Ltd,5.50,3.69
+NHF,Nib Holdings Ltd,7.56,3.68
+GOR,Gold Road Resources Ltd,3.34,3.63
+VAU,Vault Minerals Ltd,0.52,3.54
+PMV,Premier Investments Ltd,21.50,3.44
+RRL,Regis Resources Ltd,4.53,3.42
+ARB,ARB Corporation Ltd,40.82,3.39
+WAF,West African Resources Ltd,2.90,3.31
+CLW,Charter Hall Long Wale REIT,4.56,3.24
+RWC,Reliance Worldwide Corporation Ltd,4.16,3.22
+NIC,Nickel Industries Ltd,0.74,3.21
+PDN,Paladin Energy Ltd,7.41,2.96
+FBU,Fletcher Building Ltd,2.75,2.96
+TPW,Temple & Webster Group Ltd,24.57,2.96
+PXA,Pexa Group Ltd,16.57,2.94
+ASB,Austal Ltd,6.97,2.94
+BPT,Beach Energy Ltd,1.275,2.91
+RGN,Region Group,2.47,2.87
+ORA,Orora Ltd,2.21,2.83
+FLT,Flight Centre Travel Group Ltd,12.93,2.82
+HDN,Homeco Daily Needs,1.345,2.81

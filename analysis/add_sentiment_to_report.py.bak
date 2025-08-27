@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+import os, argparse, pandas as pd, numpy as np, datetime as dt
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--report_csv", default="artifacts/nextday_report.csv")
+    ap.add_argument("--sent_csv", default="out/news_sentiment.csv")
+    ap.add_argument("--out_csv", default="artifacts/nextday_report_with_sentiment.csv")
+    ap.add_argument("--sent_weight", type=float, default=10.0)
+    args = ap.parse_args()
+
+    if not os.path.exists(args.report_csv):
+        print("Missing report:", args.report_csv); return
+
+    rep = pd.read_csv(args.report_csv)
+    if "ticker" not in rep.columns:
+        print("Report missing 'ticker' column."); return
+    rep["ticker"] = rep["ticker"].astype(str).str.upper().str.replace(r"\.AX$","",regex=True)
+
+    if os.path.exists(args.sent_csv):
+        sent = pd.read_csv(args.sent_csv)
+    else:
+        sent = pd.DataFrame(columns=["Date","Ticker","Sentiment"])
+    cols = set(sent.columns)
+    if not {"Ticker","Sentiment"}.issubset(cols):
+        print("Sentiment file missing columns. Expected Ticker, Sentiment."); return
+    sent["Ticker"] = sent["Ticker"].astype(str).str.upper().str.replace(r"\.AX$","",regex=True)
+
+    df = rep.merge(sent[["Ticker","Sentiment"]].rename(columns={"Ticker":"ticker","Sentiment":"news_sentiment"}),
+                   on="ticker", how="left")
+
+    if "prob_%" in df.columns:
+        df["prob_%"] = pd.to_numeric(df["prob_%"], errors="coerce")
+    if "exp_move_%" in df.columns:
+        df["exp_move_%"] = pd.to_numeric(df["exp_move_%"], errors="coerce")
+    if "news_sentiment" not in df.columns:
+        df["news_sentiment"] = np.nan
+
+    base = df.get("prob_%", pd.Series(0, index=df.index)).fillna(0)
+    news = df["news_sentiment"].fillna(0)
+    df["rank_score"] = base + args.sent_weight * news
+
+    sort_cols = [c for c in ["rank_score","prob_%","exp_move_%"] if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols, ascending=[False]*len(sort_cols))
+
+    keep = [c for c in ["ticker","label","prob_%","exp_move_%","side","entry","tp","sl",
+                        "market_cap_m","sector","news_sentiment","rank_score","headline","source","force_exit_utc"]
+            if c in df.columns]
+    out = df[keep] if keep else df
+    os.makedirs(os.path.dirname(args.out_csv) or ".", exist_ok=True)
+    out.to_csv(args.out_csv, index=False)
+
+    print(out.head(20).to_string(index=False))
+    print("\nSaved ->", args.out_csv)
+
+if __name__ == "__main__":
+    main()

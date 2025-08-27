@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+import os, argparse, pandas as pd, numpy as np
+from datetime import datetime, timedelta, timezone as tz
+
+def read_prices(prices_dir, sym):
+    p = os.path.join(prices_dir, f"{sym}.csv")
+    if not os.path.exists(p): return None
+    try:
+        df = pd.read_csv(p)
+        for c in ("timestamp","time","datetime"):
+            if c in df.columns:
+                df["ts"] = pd.to_datetime(df[c], utc=True, errors="coerce"); break
+        if "ts" not in df.columns: return None
+        # normalize price/vol columns
+        if "close" not in df.columns:
+            for c in ("Close","close_price","adj_close"):
+                if c in df.columns: df["close"]=df[c]; break
+        if "volume" not in df.columns:
+            for c in ("Volume","vol"):
+                if c in df.columns: df["volume"]=df[c]; break
+        df = df.dropna(subset=["ts","close"]).sort_values("ts")
+        return df
+    except Exception:
+        return None
+
+def prior_close(dfin):
+    # prior day's last bar close
+    dfin = dfin.copy()
+    dfin["d"] = dfin["ts"].dt.tz_convert("Australia/Sydney").dt.date
+    if dfin.empty: return np.nan, None
+    last_day = dfin["d"].max()
+    prev = dfin[dfin["d"] < last_day]
+    if prev.empty:
+        # fallback: use last bar as "prior" if only one day
+        return float(dfin["close"].iloc[-1]), dfin["ts"].iloc[-1]
+    row = prev.iloc[-1]
+    return float(row["close"]), row["ts"]
+
+def rel_volume(dfin, lookback_days=20):
+    d = dfin.copy()
+    if "volume" not in d.columns: return np.nan
+    d["d"] = d["ts"].dt.tz_convert("Australia/Sydney").dt.date
+    last_day = d["d"].max()
+    cur = d[d["d"]==last_day]
+    hist = d[d["d"]<last_day]
+    if cur.empty or hist.empty: return np.nan
+    cur_sum = cur["volume"].sum()
+    hist_daily = hist.groupby("d")["volume"].sum()
+    base = hist_daily.tail(lookback_days).mean()
+    if base and base>0: return float(cur_sum/base)
+    return np.nan
+
+def load_caps(path):
+    if not path or not os.path.exists(path): return {}
+    try:
+        cap = pd.read_csv(path)
+        for c in ("ticker","Ticker"):
+            if c in cap.columns: cap[c] = cap[c].astype(str).str.upper().str.replace(r"\.AX$|\.ASX$","",regex=True)
+        if "ticker" not in cap.columns:
+            cap = cap.rename(columns={"Ticker":"ticker"})
+        out = {}
+        mc_col = "market_cap_m" if "market_cap_m" in cap.columns else "market_cap"
+        if mc_col not in cap.columns: return {}
+        for _,r in cap.iterrows():
+            t = str(r.get("ticker","")).upper()
+            m = r.get(mc_col, np.nan)
+            try:
+                m = float(m)
+            except Exception:
+                m = np.nan
+            out[t] = m
+        return out
+    except Exception:
+        return {}
+
+def load_universe(path):
+    if not os.path.exists(path): return []
+    df = pd.read_csv(path)
+    col = "ticker" if "ticker" in df.columns else df.columns[0]
+    tick = (df[col].astype(str).str.upper()
+            .str.replace(r"\.AX$|\.ASX$","",regex=True))
+    return list(pd.unique(tick))
+
+def has_fresh_news(ev, sym, hours=30):
+    if ev is None or ev.empty: return 0
+    rows = ev[ev["ticker"].astype(str).str.upper()==sym]
+    if rows.empty: return 0
+    cutoff = pd.Timestamp.utcnow() - pd.Timedelta(hours=hours)
+    rows = rows[pd.to_datetime(rows["published_at"], utc=True, errors="coerce") >= cutoff]
+    return int(len(rows)>0)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--universe", default="data/nextday_universe.csv")
+    ap.add_argument("--prices_dir", default="data/prices")
+    ap.add_argument("--caps", default="data/universe_caps.csv")
+    ap.add_argument("--events_csv", default="data/events.csv")
+    ap.add_argument("--min_price", type=float, default=0.02)
+    ap.add_argument("--max_price", type=float, default=2.00)
+    ap.add_argument("--max_cap_m", type=float, default=500.0)
+    ap.add_argument("--min_relvol", type=float, default=2.0)
+    ap.add_argument("--min_gap", type=float, default=0.08)
+    ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--out_csv", default="artifacts/microcap_spikes_today.csv")
+    args = ap.parse_args()
+
+    os.makedirs("artifacts", exist_ok=True)
+
+    uni = load_universe(args.universe)
+    caps_map = load_caps(args.caps)
+    ev = None
+    if os.path.exists(args.events_csv):
+        try:
+            ev = pd.read_csv(args.events_csv)
+            if "ticker" in ev.columns and "published_at" in ev.columns:
+                ev["ticker"] = ev["ticker"].astype(str).str.upper().str.replace(r"\.AX$|\.ASX$","",regex=True)
+        except Exception:
+            ev = None
+
+    rows = []
+    for sym in uni:
+        dfp = read_prices(args.prices_dir, sym)
+        if dfp is None or dfp.empty: continue
+        last = dfp.iloc[-1]
+        price = float(last["close"])
+        if not (args.min_price <= price <= args.max_price): continue
+
+        # cap filter
+        cap_m = caps_map.get(sym, np.nan)
+        if not np.isnan(cap_m) and cap_m > args.max_cap_m: continue
+
+        pc, pc_ts = prior_close(dfp)
+        if not np.isfinite(pc) or pc<=0: continue
+        gap = (price - pc) / pc
+
+        rv = rel_volume(dfp, lookback_days=20)
+
+        if (np.isfinite(rv) and rv >= args.min_relvol) and (gap >= args.min_gap):
+            news = has_fresh_news(ev, sym, hours=30)
+            # simple score: favor gap & relvol; news boost
+            score = 100*gap + 10*np.log1p(max(rv,0)) + (5 if news else 0)
+            tp = price * (1 + min(0.15, 0.5*gap + 0.02))   # heuristic target
+            sl = price * (1 - min(0.12, 0.5*gap + 0.03))   # heuristic stop
+            rows.append({
+                "ticker": sym,
+                "price": price,
+                "gap_%": 100*gap,
+                "rel_vol": rv,
+                "market_cap_m": cap_m,
+                "has_news": news,
+                "entry": round(price,6),
+                "tp": round(tp,6),
+                "sl": round(sl,6),
+                "score": score
+            })
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        print("No microcap spikes passing filters.")
+        return
+    out = out.sort_values(["score","gap_%","rel_vol"], ascending=False).head(args.top)
+    cols = ["ticker","price","gap_%","rel_vol","market_cap_m","has_news","entry","tp","sl","score"]
+    print("\n=== Microcap Spike Candidates ===")
+    print(out[cols].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+    out.to_csv(args.out_csv, index=False)
+    print(f"\nSaved -> {args.out_csv}")
+if __name__ == "__main__":
+    main()

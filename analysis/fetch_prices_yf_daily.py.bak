@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+import os, argparse, pandas as pd, yfinance as yf, time, sys
+def main():
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--universe_csv", required=True)
+    ap.add_argument("--out_dir", default="data/prices_daily")
+    ap.add_argument("--days", type=int, default=60)
+    args=ap.parse_args()
+    os.makedirs(args.out_dir, exist_ok=True)
+    u=pd.read_csv(args.universe_csv)
+    col="ticker" if "ticker" in u.columns else u.columns[0]
+    syms=(u[col].astype(str).str.upper().str.replace(r"\.AX$","",regex=True)+".AX").unique()
+    ok=0; fail=0
+    for s in syms:
+        try:
+            df=yf.download(s, period=f"{args.days}d", interval="1d", progress=False)
+            if df.empty: 
+                fail+=1; continue
+            out=df.reset_index()[["Date","Close","Volume"]].rename(columns={"Date":"date","Close":"close","Volume":"volume"})
+            out["date"]=pd.to_datetime(out["date"]).dt.tz_localize(None)
+            out.to_csv(os.path.join(args.out_dir, s.replace(".AX","")+".csv"), index=False)
+            ok+=1
+        except Exception as e:
+            fail+=1
+        time.sleep(0.2)
+    print(f"[DONE] ok={ok} fail={fail} total={len(syms)} -> {args.out_dir}")
+if __name__=="__main__": main()

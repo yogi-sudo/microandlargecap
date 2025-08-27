@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+import os, sys, time, json, math, concurrent.futures as cf
+from typing import Optional, Dict, List, Tuple
+import pandas as pd
+import requests
+
+OUT_DIR = "out"
+UNIVERSE_FILE = os.path.join(OUT_DIR, "universe_all_clean.ax.csv")  # preferred source
+FALLBACK_FILE = os.path.join(OUT_DIR, "universe_caps_full.csv")     # optional old source
+
+EODHD_API_KEY = os.getenv("EODHD_API_KEY")
+SESS = requests.Session()
+SESS.headers.update({"User-Agent":"tier-builder/1.0"})
+
+# --- Helpers ---------------------------------------------------------------
+def ax_to_eod(t: str) -> str:
+    t = t.strip().upper()
+    if t.endswith(".AX"):
+        core = t[:-3]
+    else:
+        core = t
+    # EODHD uses .AU for ASX tickers on fundamentals/eod endpoints
+    return f"{core}.AU"
+
+def get_cap_from_row(row: pd.Series) -> Optional[float]:
+    # Try multiple cap column variations (billions)
+    for c in ["MktCapB","Approx. Market Cap ($B)","MarketCapB","ApproxMarketCapB"]:
+        if c in row and pd.notnull(row[c]):
+            try:
+                return float(row[c])
+            except Exception:
+                pass
+    # Try raw MarketCap in dollars
+    for c in ["MarketCap","Approx. Market Cap ($)","MktCap"]:
+        if c in row and pd.notnull(row[c]):
+            try:
+                v = float(row[c])
+                if v > 1e6:
+                    return v / 1e9
+            except Exception:
+                pass
+    return None
+
+def fetch_fundamental_cap(ticker_ax: str) -> Tuple[str, Optional[float], Optional[str]]:
+    """Return (TickerAX, MktCapB, CompanyName) from EODHD fundamentals."""
+    if not EODHD_API_KEY:
+        return ticker_ax, None, None
+    url = f"https://eodhd.com/api/fundamentals/{ax_to_eod(ticker_ax)}"
+    params = {"api_token": EODHD_API_KEY, "fmt":"json"}
+    try:
+        r = SESS.get(url, params=params, timeout=20)
+        if r.status_code != 200:
+            return ticker_ax, None, None
+        j = r.json()
+        # company name
+        name = None
+        if isinstance(j, dict):
+            name = j.get("General", {}).get("Name") or j.get("General", {}).get("Code")
+            # market cap in USD from Highlights
+            mc = j.get("Highlights", {}).get("MarketCapitalization")
+            if mc is not None:
+                try:
+                    mc = float(mc) / 1e9
+                    return ticker_ax, mc, name
+                except Exception:
+                    pass
+        return ticker_ax, None, name
+    except Exception:
+        return ticker_ax, None, None
+
+def load_universe() -> pd.DataFrame:
+    """Load universe from preferred file; fallback if needed. Expects Ticker (.AX)."""
+    for path in [UNIVERSE_FILE, FALLBACK_FILE]:
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            # Normalize columns
+            if "Ticker" not in df.columns:
+                # Try common alternatives
+                for alt in ["Code","Symbol","ticker"]:
+                    if alt in df.columns:
+                        df = df.rename(columns={alt:"Ticker"})
+                        break
+            if "Company" not in df.columns:
+                for alt in ["Company Name","Name"]:
+                    if alt in df.columns:
+                        df = df.rename(columns={alt:"Company"})
+                        break
+                if "Company" not in df.columns:
+                    df["Company"] = ""
+            # Keep only ASX tickers
+            df = df[df["Ticker"].astype(str).str.upper().str.endswith(".AX")]
+            df = df.drop_duplicates(subset=["Ticker"]).reset_index(drop=True)
+            if not df.empty:
+                return df
+    raise FileNotFoundError("No universe file found. Provide out/universe_all_clean.ax.csv with column 'Ticker' (and optional 'Company'/'Approx. Market Cap ($B)').")
+
+def enrich_caps(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure we have MktCapB; if missing, pull from EODHD fundamentals."""
+    df = df.copy()
+    # Try to read cap directly
+    df["MktCapB"] = df.apply(get_cap_from_row, axis=1)
+
+    need = df[df["MktCapB"].isna()]["Ticker"].tolist()
+    if need and not EODHD_API_KEY:
+        print("WARN: Missing caps and no EODHD_API_KEY set; those tickers will fall to micro by default.")
+        df["MktCapB"] = df["MktCapB"].fillna(0.5)
+        return df
+
+    # Fetch in parallel for missing caps
+    if need:
+        print(f"Fetching market caps from EODHD for {len(need)} tickers…")
+        out: Dict[str, Tuple[Optional[float], Optional[str]]] = {}
+        with cf.ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(fetch_fundamental_cap, t): t for t in need}
+            for fut in cf.as_completed(futs):
+                t = futs[fut]
+                _t, capb, name = fut.result()
+                out[t] = (capb, name)
+        # Fill back
+        caps = []
+        names = []
+        for _, row in df.iterrows():
+            t = row["Ticker"]
+            capb = row["MktCapB"]
+            nm = row.get("Company", "")
+            if pd.isna(capb) and t in out and out[t][0] is not None:
+                capb = out[t][0]
+            if (not nm) and t in out and out[t][1]:
+                nm = out[t][1]
+            caps.append(capb if capb is not None else 0.5)  # default tiny micro if still missing
+            names.append(nm)
+        df["MktCapB"] = caps
+        df["Company"] = names
+    # Clean
+    df["Company"] = df["Company"].fillna("").astype(str)
+    df["MktCapB"] = pd.to_numeric(df["MktCapB"], errors="coerce").fillna(0.5)
+    return df
+
+def split_tiers(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Large >= 10B, Mid >= 3B & < 10B, Micro < 3B (in Billions)."""
+    large = df[df["MktCapB"] >= 10].copy()
+    mid   = df[(df["MktCapB"] >= 3) & (df["MktCapB"] < 10)].copy()
+    micro = df[df["MktCapB"] < 3].copy()
+    # Sort each by cap desc
+    for d in (large, mid, micro):
+        d.sort_values("MktCapB", ascending=False, inplace=True)
+        d.reset_index(drop=True, inplace=True)
+    return large, mid, micro
+
+def main():
+    os.makedirs(OUT_DIR, exist_ok=True)
+    df = load_universe()
+    print(f"Loaded universe: {len(df)} tickers (from {UNIVERSE_FILE if os.path.exists(UNIVERSE_FILE) else FALLBACK_FILE})")
+
+    df = enrich_caps(df)
+    large, mid, micro = split_tiers(df)
+
+    # Write files the rest of your pipeline expects
+    large[["Ticker","Company","MktCapB"]].to_csv(os.path.join(OUT_DIR,"universe_large.csv"), index=False)
+    mid  [["Ticker","Company","MktCapB"]].to_csv(os.path.join(OUT_DIR,"universe_mid.csv"),   index=False)
+    micro[["Ticker","Company","MktCapB"]].to_csv(os.path.join(OUT_DIR,"universe_micro.csv"), index=False)
+    # Also store the cleaned full caps
+    df[["Ticker","Company","MktCapB"]].to_csv(os.path.join(OUT_DIR,"universe_caps_full_clean.csv"), index=False)
+
+    print("Universe written:")
+    print(f"  Large : {len(large)}")
+    print(f"  Mid   : {len(mid)}")
+    print(f"  Micro : {len(micro)}")
+    print("Files:")
+    print("  out/universe_large.csv")
+    print("  out/universe_mid.csv")
+    print("  out/universe_micro.csv")
+    print("  out/universe_caps_full_clean.csv")
+
+if __name__ == "__main__":
+    main()
